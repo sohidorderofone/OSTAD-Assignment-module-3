@@ -1,0 +1,74 @@
+name: CI-CD (Test -> Deploy on Self-Hosted)
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test (GitHub-hosted runner)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests and capture results
+        run: |
+          mkdir -p artifacts
+          # Capture stdout+stderr, keep correct exit code
+          set -o pipefail
+          npm run check 2>&1 | tee artifacts/test-results.txt
+
+      - name: Upload test results artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: artifacts/test-results.txt
+          retention-days: 7
+
+  deploy:
+    name: Deploy (Self-hosted runner)
+    needs: test
+    runs-on: [ self-hosted, linux, x64, ec2-ostad ]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download test results artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: test-results
+          path: artifacts
+
+      - name: Display test results
+        run: |
+          echo "======= TEST RESULTS (from artifact) ======="
+          cat artifacts/test-results.txt
+          echo "==========================================="
+
+      - name: Use Node.js 22 (on self-hosted too)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies (deploy machine)
+        run: npm ci
+
+      - name: Deploy with PM2
+        run: |
+          pm2 delete node-app || true
+          pm2 start "./src/server.js" --name node-app
+          pm2 save
